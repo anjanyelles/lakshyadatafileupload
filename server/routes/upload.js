@@ -18,6 +18,7 @@ const router = express.Router();
 
 const UPLOAD_DIR = path.resolve(__dirname, "../../uploads");
 const MAX_FILE_SIZE = 500 * 1024 * 1024;
+const MAX_FILES_PER_BATCH = 10;
 
 const ensureUploadDir = async () => {
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
@@ -53,20 +54,40 @@ const upload = multer({
 
 const isValidObjectId = (value) => mongoose.Types.ObjectId.isValid(value);
 
-const startProcessing = async ({ filePath, headerMapping, uploadBatchId }) => {
+const processingQueue = [];
+let isProcessing = false;
+
+const processNextUpload = () => {
+  if (isProcessing) {
+    return;
+  }
+  const job = processingQueue.shift();
+  if (!job) {
+    return;
+  }
+
+  isProcessing = true;
   setImmediate(async () => {
     try {
-      await processExcelFile(filePath, headerMapping, uploadBatchId);
+      await processExcelFile(job.filePath, job.headerMapping, job.uploadBatchId);
     } catch (error) {
       await Upload.updateOne(
-        { _id: uploadBatchId },
+        { _id: job.uploadBatchId },
         {
           $set: { status: "failed" },
           $push: { errorRows: { error: error.message } },
         }
       );
+    } finally {
+      isProcessing = false;
+      processNextUpload();
     }
   });
+};
+
+const enqueueProcessing = ({ filePath, headerMapping, uploadBatchId }) => {
+  processingQueue.push({ filePath, headerMapping, uploadBatchId });
+  processNextUpload();
 };
 
 router.post("/upload", upload.single("file"), async (req, res, next) => {
@@ -105,7 +126,7 @@ router.post("/upload", upload.single("file"), async (req, res, next) => {
       });
     }
 
-    await startProcessing({
+    await enqueueProcessing({
       filePath: req.file.path,
       headerMapping: mapping,
       uploadBatchId: uploadDoc._id,
@@ -167,7 +188,7 @@ router.post(
         { $set: { headerSignature: mappingDoc.headerSignature } }
       );
 
-      await startProcessing({
+      await enqueueProcessing({
         filePath: uploadDoc.filePath,
         headerMapping: mappingDoc,
         uploadBatchId: uploadId,
@@ -179,6 +200,74 @@ router.post(
     }
   }
 );
+
+router.post("/upload/bulk", upload.array("files", MAX_FILES_PER_BATCH), async (req, res, next) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: "Excel files are required." });
+    }
+
+    const results = [];
+    for (const file of req.files) {
+      const uploadDoc = await Upload.create({
+        fileName: file.originalname,
+        filePath: file.path,
+        status: "processing",
+        totalRows: 0,
+        processedRows: 0,
+        errorRows: [],
+      });
+
+      const headers = await readExcelHeaders(file.path);
+      if (headers.length === 0) {
+        await Upload.updateOne(
+          { _id: uploadDoc._id },
+          { $set: { status: "failed" }, $push: { errorRows: { error: "No headers found." } } }
+        );
+        results.push({
+          fileName: file.originalname,
+          uploadId: uploadDoc._id,
+          status: "failed",
+          error: "No headers found.",
+        });
+        continue;
+      }
+
+      const headerSignature = createHeaderSignature(headers);
+      await Upload.updateOne({ _id: uploadDoc._id }, { $set: { headerSignature } });
+
+      const mapping = await getOrCreateHeaderMapping(headers);
+      if (!mapping) {
+        results.push({
+          fileName: file.originalname,
+          uploadId: uploadDoc._id,
+          needsMapping: true,
+          headers,
+        });
+        continue;
+      }
+
+      await enqueueProcessing({
+        filePath: file.path,
+        headerMapping: mapping,
+        uploadBatchId: uploadDoc._id,
+      });
+
+      results.push({
+        fileName: file.originalname,
+        uploadId: uploadDoc._id,
+        status: "processing",
+      });
+    }
+
+    return res.status(200).json({ results });
+  } catch (error) {
+    if (error.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ error: "File exceeds 500MB limit." });
+    }
+    return next(error);
+  }
+});
 
 router.get("/upload/:uploadId/status", async (req, res, next) => {
   try {

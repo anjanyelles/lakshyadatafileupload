@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useEffect } from "react";
 import { API_BASE_URL } from "../utils/constants";
-import { getCandidateById } from "../services/api";
+import { getCandidateById, updateCandidateStage } from "../services/api";
 
 const buildDownloadUrl = (sourceFile) => {
   if (!sourceFile) {
@@ -19,6 +19,8 @@ const CandidateProfile = () => {
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [rawOpen, setRawOpen] = useState(false);
+  const [stage, setStage] = useState("");
+  const [isSavingStage, setIsSavingStage] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -29,6 +31,7 @@ const CandidateProfile = () => {
       .then((data) => {
         if (isMounted) {
           setCandidate(data);
+          setStage(data?.interviewStage || "");
         }
       })
       .catch((err) => {
@@ -60,6 +63,23 @@ const CandidateProfile = () => {
       await navigator.clipboard.writeText(value);
     } catch (err) {
       setError("Unable to copy to clipboard.");
+    }
+  };
+
+  const handleStageChange = async (event) => {
+    const nextStage = event.target.value;
+    setStage(nextStage);
+    setError("");
+    setIsSavingStage(true);
+    try {
+      const updated = await updateCandidateStage(id, nextStage);
+      setCandidate(updated);
+      setStage(updated?.interviewStage || nextStage);
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || "Failed to update stage.");
+      setStage(candidate?.interviewStage || "");
+    } finally {
+      setIsSavingStage(false);
     }
   };
 
@@ -114,6 +134,25 @@ const CandidateProfile = () => {
             </div>
           </div>
           <div className="flex flex-wrap gap-3">
+
+          <select
+            value={stage}
+            onChange={handleStageChange}
+            disabled={isSavingStage}
+            className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-60"
+          >
+            <option value="">Select stage</option>
+            <option value="PROFILE_SELECTED">Profile Selected</option>
+            <option value="CALLED">Called</option>
+            <option value="INTERVIEW_SCHEDULED">Interview Scheduled</option>
+            <option value="FIRST_ROUND_COMPLETED">First Round Completed</option>
+            <option value="SECOND_ROUND_SCHEDULED">Second Round Scheduled</option>
+            <option value="SECOND_ROUND_COMPLETED">Second Round Completed</option>
+            <option value="HR_ROUND">HR Round</option>
+            <option value="FINAL_SELECTED">Final Selected</option>
+            <option value="REJECTED">Rejected</option>
+            <option value="ON_HOLD">On Hold</option>
+          </select>
             <button
               type="button"
               onClick={() => handleCopy(candidate.email)}

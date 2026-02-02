@@ -1,6 +1,7 @@
 const express = require("express");
 const path = require("path");
 const cors = require("cors");
+const crypto = require("crypto");
 const dotenv = require("dotenv");
 const helmet = require("helmet");
 const compression = require("compression");
@@ -44,6 +45,16 @@ app.use(
 
 app.use(helmet());
 app.use(compression());
+app.use((req, res, next) => {
+  const incomingId = req.headers["x-request-id"];
+  const requestId =
+    typeof incomingId === "string" && incomingId.trim()
+      ? incomingId.trim()
+      : crypto.randomUUID();
+  req.requestId = requestId;
+  res.setHeader("x-request-id", requestId);
+  next();
+});
 app.use(
   rateLimit({
     windowMs: REQUEST_WINDOW_MS,
@@ -62,6 +73,7 @@ app.use((req, res, next) => {
       path: req.originalUrl,
       statusCode: res.statusCode,
       durationMs: duration,
+      requestId: req.requestId,
     });
   });
   next();

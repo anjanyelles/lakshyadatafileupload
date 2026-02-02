@@ -95,6 +95,11 @@ export const getCandidateById = async (id) => {
   return response.data.data;
 };
 
+export const updateCandidateStage = async (id, stage) => {
+  const response = await api.patch(`/candidates/${id}/stage`, { stage });
+  return response.data.data;
+};
+
 export const getCandidateStats = async () => {
   const response = await api.get("/candidates/stats");
   return response.data;

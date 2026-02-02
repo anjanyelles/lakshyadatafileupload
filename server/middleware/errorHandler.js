@@ -10,10 +10,12 @@ const errorHandler = (err, req, res, next) => {
     path: req.originalUrl,
     method: req.method,
     stack: err.stack,
+    requestId: req.requestId,
   });
 
   return res.status(status).json({
     error: isServerError ? "Unexpected server error." : err.message,
+    requestId: req.requestId,
   });
 };
 

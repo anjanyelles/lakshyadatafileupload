@@ -10,33 +10,32 @@ const buildPrompt = (headers) => {
   const headerList = JSON.stringify(headers || []);
   return `You are a data normalization assistant.
 
-Map these Excel headers to canonical recruitment database fields.
+You will receive Excel column headers that may vary in naming.
+Your task is to semantically understand each header and map it
+to the STANDARD FIELD NAME.
 
-Canonical fields:
-- firstName
-- lastName
-- fullName
-- email
-- phone
-- experienceYears
-- skills
-- location
-- currentCompany
-- designation
+STANDARD FIELDS:
+firstName, lastName, fullName, email, phone, alternatePhone,
+candidateId, designation, skills, technicalSkills,
+totalExperience, relevantExperience, currentCompany,
+expectedSalary, currentSalary, location, noticePeriod,
+education, source, remarks
 
 Rules:
-- Map only clear matches
-- Use null if unsure
-- Output ONLY valid JSON object
-- No markdown, no explanation
+- Map only if meaning is clear
+- If no suitable field exists, return null
+- Do not guess
+- Output JSON only, no markdown or explanation
 
 Headers: ${headerList}
 
-Output format:
-{
-  "Excel Header": "canonicalField",
-  ...
-}`;
+Return JSON only in this format:
+[
+  {
+    "originalHeader": "string",
+    "mappedField": "standardFieldName | null"
+  }
+]`;
 };
 
 const INGESTION_SCHEMA_FIELDS = [
@@ -45,17 +44,20 @@ const INGESTION_SCHEMA_FIELDS = [
   "fullName",
   "email",
   "phone",
-  "totalExperience",
+  "alternatePhone",
   "designation",
+  "skills",
+  "technicalSkills",
+  "totalExperience",
+  "relevantExperience",
   "currentCompany",
-  "currentLocation",
-  "jobLocation",
-  "highestQualification",
-  "recruiterName",
-  "clientName",
-  "industry",
-  "submissionDate",
-  "candidateStatus",
+  "expectedSalary",
+  "currentSalary",
+  "location",
+  "noticePeriod",
+  "education",
+  "source",
+  "remarks",
 ];
 
 const createHeaderSignature = (headers) => {
@@ -124,14 +126,24 @@ const HEADER_SYNONYMS = {
     "mob"
   ],
 
-  totalExperience: [
-    "total exp",
-    "experience",
-    "total experience",
-    "overall experience",
-    "years of experience",
-    "exp",
-    "work experience"
+  alternatePhone: [
+    "alternate phone",
+    "alternate number",
+    "alternate contact",
+    "secondary phone",
+    "secondary number",
+    "other phone",
+    "alt phone",
+    "alt number"
+  ],
+
+  candidateId: [
+    "candidate id",
+    "candidate code",
+    "applicant id",
+    "applicant code",
+    "candidate number",
+    "candidate no"
   ],
 
   designation: [
@@ -144,6 +156,38 @@ const HEADER_SYNONYMS = {
     "job role"
   ],
 
+  skills: [
+    "skills",
+    "skill set",
+    "key skills",
+    "primary skills",
+    "skillset"
+  ],
+
+  technicalSkills: [
+    "technical skills",
+    "tech skills",
+    "technology skills",
+    "technical skill set"
+  ],
+
+  totalExperience: [
+    "total exp",
+    "experience",
+    "total experience",
+    "overall experience",
+    "years of experience",
+    "exp",
+    "work experience"
+  ],
+
+  relevantExperience: [
+    "relevant experience",
+    "relevant exp",
+    "relevant years",
+    "domain experience"
+  ],
+
   currentCompany: [
     "current company",
     "current employer",
@@ -154,69 +198,65 @@ const HEADER_SYNONYMS = {
     "organization"
   ],
 
-  currentLocation: [
-    "current location",
-    "current city",
-    "present location",
+  expectedSalary: [
+    "expected salary",
+    "expected ctc",
+    "expected compensation",
+    "expected pay",
+    "exp salary",
+    "exp ctc"
+  ],
+
+  currentSalary: [
+    "current salary",
+    "current ctc",
+    "current compensation",
+    "present salary",
+    "present ctc"
+  ],
+
+  location: [
     "location",
+    "current location",
+    "present location",
+    "current city",
     "city",
-    "residing location"
+    "residing location",
+    "preferred location"
   ],
 
-  jobLocation: [
-    "job location",
-    "work location",
-    "preferred location",
-    "preferred locations",
-    "posting location"
+  noticePeriod: [
+    "notice period",
+    "notice",
+    "np",
+    "joining time",
+    "availability"
   ],
 
-  highestQualification: [
-    "highest qualification",
-    "qualification",
+  education: [
     "education",
+    "qualification",
     "educational qualification",
     "degree",
+    "highest qualification",
     "highest degree"
   ],
 
-  recruiterName: [
-    "recruiter",
-    "recruiter name",
-    "hr",
-    "hr name",
-    "talent acquisition",
-    "sourcer"
+  source: [
+    "source",
+    "source of hire",
+    "sourced from",
+    "referral source",
+    "portal"
   ],
 
-  clientName: [
-    "client",
-    "client name",
-    "hiring company",
-    "customer",
-    "end client"
-  ],
-
-  industry: [
-    "industry",
-    "domain",
-    "sector"
-  ],
-
-  submissionDate: [
-    "date of submission",
-    "submitted on",
-    "date of application",
-    "application date",
-    "cv submitted date"
-  ],
-
-  candidateStatus: [
-    "status",
-    "final status",
-    "candidate status",
-    "selection status",
-    "result"
+  remarks: [
+    "remarks",
+    "comment",
+    "comments",
+    "notes",
+    "note",
+    "feedback"
   ]
 };
 
@@ -266,6 +306,32 @@ const normalizePhone = (value) => {
   return digits;
 };
 
+const isValidEmail = (value) => {
+  if (!value) {
+    return false;
+  }
+  const email = String(value).trim().toLowerCase();
+  if (!email || email === "na" || email === "n/a") {
+    return false;
+  }
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+};
+
+const getPhoneDigits = (value) => {
+  if (!value) {
+    return "";
+  }
+  return String(value).replace(/\D/g, "");
+};
+
+const normalizeString = (value) => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const trimmed = String(value).trim();
+  return trimmed ? trimmed : null;
+};
+
 const parseExperience = (value) => {
   if (value === null || value === undefined) {
     return null;
@@ -291,6 +357,23 @@ const splitName = (fullName) => {
   return { firstName, lastName };
 };
 
+const parseSkillList = (value) => {
+  if (value === null || value === undefined) {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  const raw = String(value).trim();
+  if (!raw || raw.toLowerCase() === "na" || raw.toLowerCase() === "n/a") {
+    return [];
+  }
+  return raw
+    .split(/[|,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
 const normalizeRow = (rawRow, mapping) => {
   const normalized = {};
 
@@ -300,25 +383,28 @@ const normalizeRow = (rawRow, mapping) => {
       return;
     }
 
-    const cleanValue = value === null || value === undefined ? "" : String(value).trim();
-    if (!cleanValue) {
-      return;
-    }
-
     if (field === "email") {
-      normalized.email = normalizeEmail(cleanValue);
+      normalized.email = normalizeEmail(value);
       return;
     }
     if (field === "phone") {
-      normalized.phone = normalizePhone(cleanValue);
+      normalized.phone = normalizePhone(value);
       return;
     }
-    if (field === "totalExperience") {
-      normalized.totalExperience = parseExperience(cleanValue);
+    if (field === "alternatePhone") {
+      normalized.alternatePhone = normalizePhone(value);
+      return;
+    }
+    if (field === "totalExperience" || field === "relevantExperience") {
+      normalized[field] = parseExperience(value);
+      return;
+    }
+    if (field === "skills" || field === "technicalSkills") {
+      normalized[field] = parseSkillList(value);
       return;
     }
 
-    normalized[field] = cleanValue;
+    normalized[field] = normalizeString(value);
   });
 
   if (normalized.fullName && (!normalized.firstName || !normalized.lastName)) {
@@ -343,7 +429,20 @@ const heuristicMap = (headers) => {
       mapping[header] = "email";
       return;
     }
-    if (normalized.includes("phone") || normalized.includes("mobile") || normalized.includes("contact")) {
+    if (
+      normalized.includes("alternate") ||
+      normalized.includes("secondary") ||
+      normalized.includes("other phone") ||
+      normalized.includes("alt phone")
+    ) {
+      mapping[header] = "alternatePhone";
+      return;
+    }
+    if (
+      normalized.includes("phone") ||
+      normalized.includes("mobile") ||
+      normalized.includes("contact")
+    ) {
       mapping[header] = "phone";
       return;
     }
@@ -359,12 +458,24 @@ const heuristicMap = (headers) => {
       mapping[header] = "lastName";
       return;
     }
+    if (normalized.includes("candidate id") || normalized.includes("applicant id")) {
+      mapping[header] = "candidateId";
+      return;
+    }
+    if (normalized.includes("relevant experience") || normalized.includes("relevant exp")) {
+      mapping[header] = "relevantExperience";
+      return;
+    }
     if (normalized.includes("experience")) {
-      mapping[header] = "experienceYears";
+      mapping[header] = "totalExperience";
       return;
     }
     if (normalized.includes("skill")) {
-      mapping[header] = "skills";
+      if (normalized.includes("technical") || normalized.includes("tech")) {
+        mapping[header] = "technicalSkills";
+      } else {
+        mapping[header] = "skills";
+      }
       return;
     }
     if (normalized.includes("location") || normalized.includes("city")) {
@@ -373,6 +484,30 @@ const heuristicMap = (headers) => {
     }
     if (normalized.includes("company")) {
       mapping[header] = "currentCompany";
+      return;
+    }
+    if (normalized.includes("expected salary") || normalized.includes("expected ctc")) {
+      mapping[header] = "expectedSalary";
+      return;
+    }
+    if (normalized.includes("current salary") || normalized.includes("current ctc")) {
+      mapping[header] = "currentSalary";
+      return;
+    }
+    if (normalized.includes("notice period") || normalized === "notice" || normalized === "np") {
+      mapping[header] = "noticePeriod";
+      return;
+    }
+    if (normalized.includes("education") || normalized.includes("qualification") || normalized.includes("degree")) {
+      mapping[header] = "education";
+      return;
+    }
+    if (normalized.includes("source")) {
+      mapping[header] = "source";
+      return;
+    }
+    if (normalized.includes("remark") || normalized.includes("comment") || normalized.includes("note")) {
+      mapping[header] = "remarks";
       return;
     }
     if (normalized.includes("designation") || normalized.includes("title") || normalized.includes("role")) {
@@ -391,14 +526,44 @@ const parseJsonResponse = (payload) => {
     throw new Error("Empty AI response.");
   }
   const trimmed = payload.trim();
-  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+  if (
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"))
+  ) {
     return JSON.parse(trimmed);
   }
-  const match = trimmed.match(/\{[\s\S]*\}/);
+  const match = trimmed.match(/\[[\s\S]*\]|\{[\s\S]*\}/);
   if (!match) {
-    throw new Error("Unable to locate JSON object in AI response.");
+    throw new Error("Unable to locate JSON in AI response.");
   }
   return JSON.parse(match[0]);
+};
+
+const coerceMapping = (headers, payload) => {
+  if (!payload) {
+    return null;
+  }
+  if (Array.isArray(payload)) {
+    return payload.reduce((acc, entry) => {
+      if (!entry || typeof entry !== "object") {
+        return acc;
+      }
+      const originalHeader = entry.originalHeader;
+      if (!originalHeader) {
+        return acc;
+      }
+      acc[originalHeader] =
+        entry.mappedField === undefined ? null : entry.mappedField;
+      return acc;
+    }, {});
+  }
+  if (typeof payload === "object") {
+    return payload;
+  }
+  return headers.reduce((acc, header) => {
+    acc[header] = null;
+    return acc;
+  }, {});
 };
 
 const generateGeminiMapping = async (headers) => {
@@ -497,7 +662,7 @@ router.post(
             : await generateOpenAiMapping(headers);
 
         if (aiMapping) {
-          mapping = aiMapping;
+          mapping = coerceMapping(headers, aiMapping);
         }
       }
 
@@ -585,12 +750,20 @@ router.post(
           seenPhones.add(phone);
         }
 
-        const record = {};
-        INGESTION_SCHEMA_FIELDS.forEach((field) => {
-          record[field] = normalized[field] || "";
-        });
+      const record = {};
+      INGESTION_SCHEMA_FIELDS.forEach((field) => {
+        if (field === "source") {
+          record.source = normalized.source || "Excel Import";
+          return;
+        }
+        if (field === "skills" || field === "technicalSkills") {
+          record[field] = normalized[field] || [];
+          return;
+        }
+        record[field] = normalized[field] ?? null;
+      });
 
-        validRecords.push(record);
+      validRecords.push({ candidate: record });
       });
 
       const skippedCount =
@@ -600,6 +773,322 @@ router.post(
         validRecords,
         skippedCount,
         skipReasons,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+router.post(
+  "/ai/validate-candidate",
+  [body("candidate").isObject().withMessage("Candidate payload is required.")],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ error: errors.array()[0].msg });
+      }
+
+      const candidate = req.body.candidate || {};
+      const rawEmail = candidate.email;
+      const rawPhone = candidate.phone || candidate.alternatePhone;
+
+      const hasEmail = rawEmail !== null && rawEmail !== undefined && String(rawEmail).trim() !== "";
+      const hasPhone = rawPhone !== null && rawPhone !== undefined && String(rawPhone).trim() !== "";
+
+      if (!hasEmail && !hasPhone) {
+        return res.status(200).json({
+          status: "INVALID",
+          reason: "Email or phone is required.",
+        });
+      }
+
+      if (hasEmail && !isValidEmail(rawEmail)) {
+        return res.status(200).json({
+          status: "INVALID",
+          reason: "Email format is invalid.",
+        });
+      }
+
+      if (hasPhone && getPhoneDigits(rawPhone).length < 10) {
+        return res.status(200).json({
+          status: "INVALID",
+          reason: "Phone must have at least 10 digits.",
+        });
+      }
+
+      return res.status(200).json({ status: "VALID" });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+router.post(
+  "/ai/dedupe-candidate",
+  [
+    body("candidate").isObject().withMessage("Candidate payload is required."),
+    body("existingEmails").optional().isArray(),
+    body("existingPhones").optional().isArray(),
+  ],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ error: errors.array()[0].msg });
+      }
+
+      const candidate = req.body.candidate || {};
+      const rawEmail = candidate.email;
+      const rawPhone = candidate.phone;
+
+      const email = rawEmail ? String(rawEmail).trim().toLowerCase() : "";
+      const phoneDigits = getPhoneDigits(rawPhone);
+
+      const existingEmails = new Set(
+        (req.body.existingEmails || []).map((value) => String(value).trim().toLowerCase())
+      );
+      const existingPhones = new Set(
+        (req.body.existingPhones || []).map((value) => getPhoneDigits(value))
+      );
+
+      const emailDuplicate = Boolean(email) && existingEmails.has(email);
+      const phoneDuplicate = Boolean(phoneDigits) && existingPhones.has(phoneDigits);
+
+      let duplicateStatus = "NONE";
+      if (emailDuplicate && phoneDuplicate) {
+        duplicateStatus = "DUPLICATE_BOTH";
+      } else if (emailDuplicate) {
+        duplicateStatus = "DUPLICATE_EMAIL";
+      } else if (phoneDuplicate) {
+        duplicateStatus = "DUPLICATE_PHONE";
+      }
+
+      return res.status(200).json({ duplicateStatus });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+router.post(
+  "/ai/ingestion-decision",
+  [
+    body("validation").isObject().withMessage("Validation payload is required."),
+    body("dedupe").isObject().withMessage("Dedupe payload is required."),
+  ],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ error: errors.array()[0].msg });
+      }
+
+      const validation = req.body.validation || {};
+      const dedupe = req.body.dedupe || {};
+
+      if (validation.status === "INVALID") {
+        return res.status(200).json({
+          finalStatus: "INVALID",
+          reason: validation.reason || "Validation failed.",
+        });
+      }
+
+      if (dedupe.duplicateStatus && dedupe.duplicateStatus !== "NONE") {
+        return res.status(200).json({
+          finalStatus: "DUPLICATE",
+          reason: `Duplicate detected: ${dedupe.duplicateStatus}.`,
+        });
+      }
+
+      return res.status(200).json({ finalStatus: "SUCCESS" });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+router.post(
+  "/ai/audit-log",
+  [
+    body("rowNumber").isInt({ min: 1 }).withMessage("Row number is required."),
+    body("fileName").isString().notEmpty().withMessage("File name is required."),
+    body("failureReason").optional().isString(),
+  ],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ error: errors.array()[0].msg });
+      }
+
+      const { rowNumber, fileName, failureReason } = req.body;
+      const timestamp = new Date().toISOString();
+
+      return res.status(200).json({
+        rowNumber,
+        fileName: String(fileName).trim(),
+        failureReason: failureReason ? String(failureReason).trim() : null,
+        timestamp,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+const TITLE_CASE_EXCEPTIONS = new Set(["and", "or", "of", "the", "in", "for", "to", "with"]);
+
+const ABBREVIATION_MAP = {
+  reactjs: "React",
+  "react.js": "React",
+  nodejs: "Node.js",
+  "node.js": "Node.js",
+  js: "JavaScript",
+  ts: "TypeScript",
+};
+
+const normalizeToken = (value) => {
+  if (!value) {
+    return "";
+  }
+  const raw = String(value).trim();
+  if (!raw) {
+    return "";
+  }
+  const lower = raw.toLowerCase();
+  if (ABBREVIATION_MAP[lower]) {
+    return ABBREVIATION_MAP[lower];
+  }
+  const words = lower.split(/\s+/);
+  return words
+    .map((word, index) => {
+      if (index > 0 && TITLE_CASE_EXCEPTIONS.has(word)) {
+        return word;
+      }
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(" ");
+};
+
+const normalizeSkillList = (value) => {
+  const list = parseSkillList(value);
+  const normalized = list
+    .map((item) => normalizeToken(item))
+    .filter(Boolean);
+  return Array.from(new Set(normalized));
+};
+
+router.post(
+  "/ai/normalize-skills-designation",
+  [
+    body("skills").optional(),
+    body("designation").optional(),
+  ],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ error: errors.array()[0].msg });
+      }
+
+      const normalizedSkills = normalizeSkillList(req.body.skills || []);
+      const normalizedDesignation = normalizeToken(req.body.designation || "");
+
+      return res.status(200).json({
+        skills: normalizedSkills,
+        designation: normalizedDesignation,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+const STAGE_ORDER = [
+  "PROFILE_SELECTED",
+  "CALLED",
+  "INTERVIEW_SCHEDULED",
+  "FIRST_ROUND_COMPLETED",
+  "SECOND_ROUND_SCHEDULED",
+  "SECOND_ROUND_COMPLETED",
+  "HR_ROUND",
+  "FINAL_SELECTED",
+  "REJECTED",
+  "ON_HOLD",
+];
+
+const TERMINAL_STAGES = new Set(["FINAL_SELECTED", "REJECTED"]);
+
+const normalizeStage = (value) =>
+  String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s\-]+/g, "_");
+
+router.post(
+  "/ai/validate-stage-transition",
+  [
+    body("currentStage").isString().notEmpty().withMessage("Current stage is required."),
+    body("newStage").isString().notEmpty().withMessage("New stage is required."),
+  ],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ error: errors.array()[0].msg });
+      }
+
+      const currentStage = normalizeStage(req.body.currentStage);
+      const newStage = normalizeStage(req.body.newStage);
+
+      const currentIndex = STAGE_ORDER.indexOf(currentStage);
+      const newIndex = STAGE_ORDER.indexOf(newStage);
+
+      if (currentIndex === -1) {
+        return res.status(200).json({
+          isValid: false,
+          reason: "Current stage is not recognized.",
+          normalizedStage: newStage,
+        });
+      }
+
+      if (newIndex === -1) {
+        return res.status(200).json({
+          isValid: false,
+          reason: "New stage is not recognized.",
+          normalizedStage: newStage,
+        });
+      }
+
+      if (TERMINAL_STAGES.has(currentStage) && currentStage !== newStage) {
+        return res.status(200).json({
+          isValid: false,
+          reason: "Current stage is terminal.",
+          normalizedStage: newStage,
+        });
+      }
+
+      if (newIndex < currentIndex) {
+        return res.status(200).json({
+          isValid: false,
+          reason: "Stage cannot move backward.",
+          normalizedStage: newStage,
+        });
+      }
+
+      if (newIndex > currentIndex + 1) {
+        return res.status(200).json({
+          isValid: false,
+          reason: "Stage transition skips required steps.",
+          normalizedStage: newStage,
+        });
+      }
+
+      return res.status(200).json({
+        isValid: true,
+        normalizedStage: newStage,
       });
     } catch (error) {
       return next(error);

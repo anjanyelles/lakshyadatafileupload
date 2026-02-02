@@ -13,33 +13,32 @@ const buildPrompt = (headers) => {
 
   return `You are a data normalization assistant.
 
-Map these Excel headers to canonical recruitment database fields.
+You will receive Excel column headers that may vary in naming.
+Your task is to semantically understand each header and map it
+to the STANDARD FIELD NAME.
 
-Canonical fields:
-- firstName
-- lastName
-- fullName
-- email
-- phone
-- experienceYears
-- skills
-- location
-- currentCompany
-- designation
+STANDARD FIELDS:
+firstName, lastName, fullName, email, phone, alternatePhone,
+candidateId, designation, skills, technicalSkills,
+totalExperience, relevantExperience, currentCompany,
+expectedSalary, currentSalary, location, noticePeriod,
+education, source, remarks
 
 Rules:
-- Map only clear matches
-- Use null if unsure
-- Output ONLY valid JSON object
-- No markdown, no explanation
+- Map only if meaning is clear
+- If no suitable field exists, return null
+- Do not guess
+- Output JSON only, no markdown or explanation
 
 Headers: ${headerList}
 
-Output format:
-{
-  "Excel Header": "canonicalField",
-  ...
-}`;
+Return JSON only in this format:
+[
+  {
+    "originalHeader": "string",
+    "mappedField": "standardFieldName | null"
+  }
+]`;
 };
 
 const sleep = (ms) =>
@@ -62,16 +61,46 @@ const parseJsonResponse = (payload) => {
   }
 
   const trimmed = payload.trim();
-  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+  if (
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"))
+  ) {
     return JSON.parse(trimmed);
   }
 
-  const match = trimmed.match(/\{[\s\S]*\}/);
+  const match = trimmed.match(/\[[\s\S]*\]|\{[\s\S]*\}/);
   if (!match) {
-    throw new Error("Unable to locate JSON object in AI response.");
+    throw new Error("Unable to locate JSON in AI response.");
   }
 
   return JSON.parse(match[0]);
+};
+
+const coerceMapping = (headers, payload) => {
+  if (!payload) {
+    return null;
+  }
+  if (Array.isArray(payload)) {
+    return payload.reduce((acc, entry) => {
+      if (!entry || typeof entry !== "object") {
+        return acc;
+      }
+      const originalHeader = entry.originalHeader;
+      if (!originalHeader) {
+        return acc;
+      }
+      acc[originalHeader] =
+        entry.mappedField === undefined ? null : entry.mappedField;
+      return acc;
+    }, {});
+  }
+  if (typeof payload === "object") {
+    return payload;
+  }
+  return headers.reduce((acc, header) => {
+    acc[header] = null;
+    return acc;
+  }, {});
 };
 
 const saveHeaderMapping = async (headers, mappedHeaders) => {
@@ -131,7 +160,7 @@ const generateHeaderMapping = async (headers, options = {}) => {
       });
 
       const text = response?.content?.[0]?.text;
-      const mapping = parseJsonResponse(text);
+      const mapping = coerceMapping(headers, parseJsonResponse(text));
 
       await saveHeaderMapping(headers, mapping);
       return mapping;

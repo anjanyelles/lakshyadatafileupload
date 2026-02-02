@@ -14,6 +14,7 @@ const CandidateSchema = new Schema(
     location: { type: String, trim: true },
     currentCompany: { type: String, trim: true },
     designation: { type: String, trim: true },
+    interviewStage: { type: String, trim: true },
     sourceFile: { type: String, trim: true },
     uploadBatchId: { type: Schema.Types.ObjectId, ref: "Upload", index: true },
     rawData: { type: Schema.Types.Mixed },
